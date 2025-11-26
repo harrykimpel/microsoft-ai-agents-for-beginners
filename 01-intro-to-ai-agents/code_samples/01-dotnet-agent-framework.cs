@@ -2,6 +2,8 @@
 
 #:package Microsoft.Extensions.AI@10.*
 #:package Microsoft.Agents.AI.OpenAI@1.*-*
+#:package OpenTelemetry@1.14.*
+#:package OpenTelemetry.Exporter.OpenTelemetryProtocol@1.14.*
 
 using System.ClientModel;
 using System.ComponentModel;
@@ -10,6 +12,22 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
 using OpenAI;
+
+using OpenTelemetry;
+using OpenTelemetry.Trace;
+
+var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT") ?? "https://otlp.nr-data.net";
+var otlpHeaders = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS") ?? throw new InvalidOperationException("OTEL_EXPORTER_OTLP_HEADERS is not set.");
+
+// Create a TracerProvider that exports to the console
+using var tracerProvider = Sdk.CreateTracerProviderBuilder()
+    .AddSource("agent-telemetry-source")
+    .AddOtlpExporter( options =>
+    {
+        options.Endpoint = new Uri(otlpEndpoint);
+        options.Headers = otlpHeaders;
+    })
+    .Build();
 
 // Tool Function: Random Destination Generator
 // This static method will be available to the agent as a callable tool
@@ -46,8 +64,8 @@ static string GetRandomDestination()
 // Retrieve the model ID, defaults to openai/gpt-5-mini if not specified
 // Retrieve the GitHub token for authentication, throws exception if not specified
 var github_endpoint = Environment.GetEnvironmentVariable("GH_ENDPOINT") ?? "https://models.github.ai/inference";
-var github_model_id = Environment.GetEnvironmentVariable("GH_MODEL_ID") ?? "openai/gpt-5-mini";
-var github_token = Environment.GetEnvironmentVariable("GH_TOKEN") ?? throw new InvalidOperationException("GH_TOKEN is not set.");
+var github_model_id = Environment.GetEnvironmentVariable("GH_MODEL_ID") ?? "gpt-4.1-mini";
+var github_token = Environment.GetEnvironmentVariable("GITHUB_TOKEN") ?? throw new InvalidOperationException("GITHUB_TOKEN is not set.");
 
 // Configure OpenAI Client Options
 // Create configuration options to point to GitHub Models endpoint
@@ -71,7 +89,10 @@ AIAgent agent = openAIClient
     .CreateAIAgent(
         instructions: "You are a helpful AI Agent that can help plan vacations for customers at random destinations",
         tools: [AIFunctionFactory.Create(GetRandomDestination)]
-    );
+    )
+    .AsBuilder()
+    .UseOpenTelemetry(sourceName: "agent-telemetry-source")
+    .Build();
 
 // Execute Agent: Plan a Day Trip
 // Run the agent with streaming enabled for real-time response display
@@ -82,3 +103,8 @@ await foreach (var update in agent.RunStreamingAsync("Plan me a day trip"))
     await Task.Delay(10);
     Console.Write(update);
 }
+
+tracerProvider.ForceFlush();
+
+// wait for 5 minutes before exiting
+//await Task.Delay(TimeSpan.FromMinutes(5));
