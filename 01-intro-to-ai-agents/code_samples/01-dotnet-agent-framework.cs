@@ -40,6 +40,8 @@ static string GetRandomDestination()
     // The agent will randomly select from these options
     var destinations = new List<string>
     {
+        "Garmisch-Partenkirchen, Germany",
+        "Munich, Germany",
         "Paris, France",
         "Tokyo, Japan",
         "New York City, USA",
@@ -58,6 +60,14 @@ static string GetRandomDestination()
     int index = random.Next(destinations.Count);
     return destinations[index];
 }
+
+[Description("Get the weather for a given location.")]
+static string GetWeather([Description("The location to get the weather for.")] string location)
+    => $"The weather in {location} is cloudy with a high of 15°C.";
+
+[Description("The current date and time.")]
+static string GetDateTime()
+    => DateTime.Now.ToString();
 
 // Extract configuration from environment variables
 // Retrieve the GitHub Models API endpoint, defaults to https://models.github.ai/inference if not specified
@@ -88,7 +98,11 @@ AIAgent agent = openAIClient
     .GetChatClient(github_model_id)
     .CreateAIAgent(
         instructions: "You are a helpful AI Agent that can help plan vacations for customers at random destinations",
-        tools: [AIFunctionFactory.Create(GetRandomDestination)]
+        tools: [
+            AIFunctionFactory.Create(GetRandomDestination),
+            AIFunctionFactory.Create(GetWeather),
+            AIFunctionFactory.Create(GetDateTime, name: nameof(GetDateTime))
+        ]
     )
     .AsBuilder()
     .UseOpenTelemetry(sourceName: "agent-telemetry-source")
@@ -98,7 +112,8 @@ AIAgent agent = openAIClient
 // Run the agent with streaming enabled for real-time response display
 // Shows the agent's thinking and response as it generates the content
 // Provides better user experience with immediate feedback
-await foreach (var update in agent.RunStreamingAsync("Plan me a day trip"))
+string userPrompt = "Plan me a day trip with activities and calculate the current weather at the destination. Mention the current date and time of the plan.";
+await foreach (var update in agent.RunStreamingAsync(userPrompt))
 {
     await Task.Delay(10);
     Console.Write(update);
