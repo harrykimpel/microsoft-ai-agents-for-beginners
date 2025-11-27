@@ -20,18 +20,19 @@ using OpenTelemetry.Trace;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Resources;
 
-const string ActivitySourceName = "agent-travel-planner";
+const string ActivitySourceName = "microsoft-agent-framework";
 const string ActivitySourceVersion = "1.0.0";
 
 var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT") ?? "https://otlp.nr-data.net";
 var otlpHeaders = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS") ?? throw new InvalidOperationException("OTEL_EXPORTER_OTLP_HEADERS is not set.");
+var otlpServiceName = Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME") ?? "agent-travel-planner";
 
 // Create a TracerProvider that exports to the console
 using var tracerProvider = Sdk.CreateTracerProviderBuilder()
     .AddSource(ActivitySourceName)
     .ConfigureResource(resource =>
         resource.AddService(
-          serviceName: ActivitySourceName,
+          serviceName: otlpServiceName,
           serviceVersion: ActivitySourceVersion))
     .AddOtlpExporter( options =>
     {
@@ -138,7 +139,7 @@ using var span = tracer.StartActiveSpan("hello-span");
             ]
         )
         .AsBuilder()
-        .UseOpenTelemetry(sourceName: ActivitySourceName)
+        .UseOpenTelemetry(sourceName: "microsoft-agent-framework")
         .Build();
 
     // Execute Agent: Plan a Day Trip
