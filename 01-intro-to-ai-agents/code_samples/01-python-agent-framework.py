@@ -4,6 +4,10 @@ import os
 from random import randint, uniform
 import asyncio
 import time
+import uuid
+import logging
+import requests
+import json
 
 # Third-party library for loading environment variables from .env file
 from dotenv import load_dotenv
@@ -13,10 +17,44 @@ from dotenv import load_dotenv
 # OpenAIChatClient: Client for connecting to OpenAI-compatible APIs (including GitHub Models)
 from agent_framework import ChatAgent
 from agent_framework.openai import OpenAIChatClient
-from agent_framework.observability import setup_observability
+from agent_framework.observability import setup_observability, get_tracer, get_meter
 
-# Enable Agent Framework telemetry with console output (default behavior)
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.semconv._incubating.attributes.service_attributes import SERVICE_NAME
+
+resource = Resource.create({SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME")})
+
+# if not logging.getLogger().handlers:
+#     logging.basicConfig(
+#         level=os.getenv("LOG_LEVEL", "INFO"),
+#         format="%(asctime)s | %(levelname)s | tools | %(message)s",
+#     )
+# logger = logging.getLogger("travel_agent")
+# logger.debug("Logger initialized")
+logger = logging.getLogger()
+def setup_logging():
+    # Create and set a global logger provider for the application.
+    logger_provider = LoggerProvider(resource=resource)
+    # Log processors are initialized with an exporter which is responsible
+    #logger_provider.add_log_record_processor(BatchLogRecordProcessor(ConsoleLogExporter()))
+    # Sets the global default logger provider
+    set_logger_provider(logger_provider)
+    # Create a logging handler to write logging records, in OTLP format, to the exporter.
+    handler = LoggingHandler()
+    # Attach the handler to the root logger. `getLogger()` with no arguments returns the root logger.
+    # Events from all child loggers will be processed by this handler.
+    #logger = logging.getLogger()
+    logger.addHandler(handler)
+    # Set the logging level to NOTSET to allow all records to be processed by the handler.
+    logger.setLevel(logging.INFO)
+
+# # Enable Agent Framework telemetry with console output (default behavior)
 setup_observability(enable_sensitive_data=True, exporters=["otlp"])
+setup_logging()
+tracer = get_tracer()
+meter = get_meter()
 
 # 🔧 Load Environment Variables
 # This loads configuration from a .env file in the project root
@@ -52,8 +90,14 @@ def get_random_destination() -> str:
     delay_seconds = uniform(0, 0.99)
     time.sleep(delay_seconds)
 
-    # Return a random destination from the list
-    return destinations[randint(0, len(destinations) - 1)]
+    with tracer.start_as_current_span("get_destination_from_list") as current_span:
+        # Return a random destination from the list
+        destination = destinations[randint(0, len(destinations) - 1)]
+        logger.info("[get_destination_from_list] selected", extra={"destination": destination})
+        current_span.set_attribute("destination", destination)
+        pass
+    
+    return destination
 
 # Tool Function: Get weather for a location
 def get_weather(location: str) -> str:
@@ -73,7 +117,36 @@ def get_weather(location: str) -> str:
     if randint(1, 10) > 7:
         raise Exception("Weather service is currently unavailable. Please try again later.")
 
-    return f"The weather in {location} is cloudy with a high of 15°C."
+    request_id = str(uuid.uuid4())
+    t0 = time.time()
+    logger.info("[get_weather] start", extra={"request_id": request_id, "city": location})
+    api_key = os.getenv("OPENWEATHER_API_KEY")
+    if not api_key:
+        logger.error("[get_weather] missing API key", extra={"request_id": request_id})
+        raise ValueError("Weather service not configured. OPENWEATHER_API_KEY environment variable is required.")
+    try:
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={api_key}&units=metric"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        weather = data["weather"][0]["description"]
+        temp = data["main"]["temp"]
+        feels_like = data["main"]["feels_like"]
+        humidity = data["main"]["humidity"]
+        result = f"Weather in {location}: {weather}, Temperature: {temp}°C (feels like {feels_like}°C), Humidity: {humidity}%"
+        elapsed_ms = int((time.time() - t0) * 1000)
+        logger.info(
+            "[get_weather] complete",
+            extra={"request_id": request_id, "city": location, "weather": weather, "temp": temp, "elapsed_ms": elapsed_ms},
+        )
+        return result
+    except requests.exceptions.RequestException as e:
+        logger.error("[get_weather] request_error", extra={"request_id": request_id, "city": location, "error": str(e)})
+        return f"Error fetching weather data for {location}. Please check the city name."
+    except KeyError as e:
+        logger.error("[get_weather] parse_error", extra={"request_id": request_id, "city": location, "error": str(e)})
+        return f"Error parsing weather data for {location}."
+    #return f"The weather in {location} is cloudy with a high of 15°C."
 
 
 # Tool Function: Get current date and time
@@ -93,10 +166,16 @@ def get_datetime() -> str:
 # - GITHUB_ENDPOINT: API endpoint URL (usually https://models.inference.ai.azure.com)
 # - GITHUB_TOKEN: Your GitHub personal access token
 # - GITHUB_MODEL_ID: Model to use (e.g., gpt-4o-mini, gpt-4o)
+model_id=os.environ.get("GITHUB_MODEL_ID")
+# openai_chat_client = OpenAIChatClient(
+#     base_url=os.environ.get("GITHUB_ENDPOINT"),
+#     api_key=os.environ.get("GITHUB_TOKEN"), 
+#     model_id=model_id
+# )
 openai_chat_client = OpenAIChatClient(
-    base_url=os.environ.get("GITHUB_ENDPOINT"),
-    api_key=os.environ.get("GITHUB_TOKEN"), 
-    model_id=os.environ.get("GITHUB_MODEL_ID")
+    #base_url=os.environ.get("GITHUB_ENDPOINT"),
+    api_key=os.environ.get("OPENAI_API_KEY"), 
+    model_id=model_id
 )
 
 # 🤖 Create the Travel Planning Agent
@@ -125,6 +204,39 @@ async def main():
     # Display the formatted travel plan
     print("🏖️ Travel plan:")
     print(text_content)
+
+    logger.info("[agent_response]", extra={
+        "newrelic.event.type": "LlmChatCompletionMessage", 
+        "id": 1, 
+        "request_id": 1,
+        "span_id": 1,
+        "trace_id": 1,
+        "response.model": model_id,
+        "vendor": "OpenAI",
+        "ingest_source": "Python",
+        "content": userPrompt,
+        "role": "user",
+        "sequence": 0,
+        "is_response": False,
+        "completion_id": 1,
+        "tags.aiEnabledApp": True})
+    
+    logger.info("[agent_response]", extra={
+        "newrelic.event.type": "LlmChatCompletionSummary", 
+        "id": 1, 
+        "request_id": 1,
+        "span_id": 1,
+        "trace_id": 1,
+        "request.model": model_id,
+        "response.model": model_id,
+        "token_count": 0,
+        "request.max_tokens": 0,
+        "response.number_of_messages": 2,
+        "response.choices.finish_reason": "stop",
+        "vendor": "OpenAI",
+        "ingest_source": "Python",
+        "tags.aiEnabledApp": True})
+
 
 if __name__ == "__main__":
     asyncio.run(main())
