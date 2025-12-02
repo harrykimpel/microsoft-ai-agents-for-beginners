@@ -26,7 +26,8 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.semconv._incubating.attributes.service_attributes import SERVICE_NAME
 from opentelemetry.trace.span import format_trace_id
 
-resource = Resource.create({SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME")})
+serviceName=os.environ.get("OTEL_SERVICE_NAME")
+resource = Resource.create({SERVICE_NAME: serviceName})
 
 # if not logging.getLogger().handlers:
 #     logging.basicConfig(
@@ -169,16 +170,16 @@ def get_datetime() -> str:
 # - GITHUB_TOKEN: Your GitHub personal access token
 # - GITHUB_MODEL_ID: Model to use (e.g., gpt-4o-mini, gpt-4o)
 model_id=os.environ.get("GITHUB_MODEL_ID")
-openai_chat_client = OpenAIChatClient(
-    base_url=os.environ.get("GITHUB_ENDPOINT"),
-    api_key=os.environ.get("GITHUB_TOKEN"), 
-    model_id=model_id
-)
 # openai_chat_client = OpenAIChatClient(
-#     #base_url=os.environ.get("GITHUB_ENDPOINT"),
-#     api_key=os.environ.get("OPENAI_API_KEY"), 
+#     base_url=os.environ.get("GITHUB_ENDPOINT"),
+#     api_key=os.environ.get("GITHUB_TOKEN"), 
 #     model_id=model_id
 # )
+openai_chat_client = OpenAIChatClient(
+    #base_url=os.environ.get("GITHUB_ENDPOINT"),
+    api_key=os.environ.get("OPENAI_API_KEY"), 
+    model_id=model_id
+)
 
 # 🤖 Create the Travel Planning Agent
 # This creates a conversational AI agent with specific capabilities:
@@ -191,12 +192,17 @@ agent = ChatAgent(
     tools=[get_random_destination, get_weather, get_datetime]  # Tool functions available to the agent
 )
 
-entityGuid=os.environ.get("NEW_RELIC_ENTITY_GUID")
+newrelicEntityGuid=os.environ.get("NEW_RELIC_ENTITY_GUID")
+newrelicAccount=os.environ.get("NEW_RELIC_ACCOUNT")
+newrelicAccountId=os.environ.get("NEW_RELIC_ACCOUNT_ID")
+newrelicTrustedAccountId=os.environ.get("NEW_RELIC_TRUSTED_ACCOUNT_ID")
 
 # 🚀 Run the Agent
 # Send a message to the agent and get a response
 # The agent will use its tools (get_random_destination) if needed
 async def main():
+    span_id = ""
+    trace_id = ""
     with tracer.start_as_current_span("main") as current_span:
         logger.info("[main] starting agent interaction")
         current_span.set_attribute("model_id", model_id)
@@ -216,14 +222,19 @@ async def main():
         span_id = format(current_span.get_span_context().span_id, "016x")
         trace_id = format_trace_id(current_span.get_span_context().trace_id)
 
-        input_tokens = response.usage_details.input_token_count
-        output_tokens = response.usage_details.output_token_count
+    input_tokens = response.usage_details.input_token_count
+    output_tokens = response.usage_details.output_token_count
+    response_id = response.response_id
+    duration = (current_span.end_time - current_span.start_time) / 100000
+    host = "miniature-telegram-4gqj47g5vjhq9xr.github.dev"
 
-        logger.info("[agent_response]", extra={
+    logger.info("[agent_response]", extra={
             "newrelic.event.type": "LlmChatCompletionMessage", 
-            #"appId": 1234567890,
-            "appName": "agent-travel-planner",
-            "entityGuid": entityGuid,
+            "appId": 1234567890,
+            "appName": serviceName,
+            "duration": duration,
+            "host": host,
+            "entityGuid": newrelicEntityGuid,
             "id": str(uuid.uuid4()), 
             "request_id": str(uuid.uuid4()),
             "span_id": span_id,
@@ -237,15 +248,17 @@ async def main():
             "is_response": False,
             "completion_id": str(uuid.uuid4()),
             "tags.aiEnabledApp": True,
-            "tags.account": "AI-Observability",
-            "tags.accountId": 4541509,
-            "tags.trustedAccountId": 3882521})
+            "tags.account": newrelicAccount,
+            "tags.accountId": newrelicAccountId,
+            "tags.trustedAccountId": newrelicTrustedAccountId})
         
-        logger.info("[agent_response]", extra={
+    logger.info("[agent_response]", extra={
             "newrelic.event.type": "LlmChatCompletionMessage", 
-            #"appId": 1234567890,
-            "appName": "agent-travel-planner",
-            "entityGuid": entityGuid,
+            "appId": 1234567890,
+            "appName": serviceName,
+            "duration": duration,
+            "host": host,
+            "entityGuid": newrelicEntityGuid,
             "id": str(uuid.uuid4()), 
             "request_id": str(uuid.uuid4()),
             "span_id": span_id,
@@ -259,15 +272,17 @@ async def main():
             "is_response": True,
             "completion_id": str(uuid.uuid4()),
             "tags.aiEnabledApp": True,
-            "tags.account": "AI-Observability",
-            "tags.accountId": 4541509,
-            "tags.trustedAccountId": 3882521})
+            "tags.account": newrelicAccount,
+            "tags.accountId": newrelicAccountId,
+            "tags.trustedAccountId": newrelicTrustedAccountId})
         
-        logger.info("[agent_response]", extra={
+    logger.info("[agent_response]", extra={
             "newrelic.event.type": "LlmChatCompletionSummary", 
-            #"appId": 1234567890,
-            "appName": "agent-travel-planner",
-            "entityGuid": entityGuid,
+            "appId": 1234567890,
+            "appName": serviceName,
+            "duration": duration,
+            "host": host,
+            "entityGuid": newrelicEntityGuid,
             "id": str(uuid.uuid4()), 
             "request_id": str(uuid.uuid4()),
             "span_id": span_id,
@@ -277,16 +292,15 @@ async def main():
             "token_count": input_tokens+output_tokens,
             "request.max_tokens": 0,
             "response.number_of_messages": 2,
-            "response.choices.finish_reason": "FINISH",
+            "response.choices.finish_reason": "stop",
             "vendor": "openai",
             "ingest_source": "Python",
             "tags.aiEnabledApp": True,
-            "tags.account": "AI-Observability",
-            "tags.accountId": 4541509,
-            "tags.trustedAccountId": 3882521})
+            "tags.account": newrelicAccount,
+            "tags.accountId": newrelicAccountId,
+            "tags.trustedAccountId": newrelicTrustedAccountId})
     
-        pass
-
-
+    logger.info("[main] agent interaction complete")
+       
 if __name__ == "__main__":
     asyncio.run(main())
