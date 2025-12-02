@@ -8,6 +8,7 @@ import uuid
 import logging
 import requests
 import json
+import uuid
 
 # Third-party library for loading environment variables from .env file
 from dotenv import load_dotenv
@@ -23,6 +24,7 @@ from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.semconv._incubating.attributes.service_attributes import SERVICE_NAME
+from opentelemetry.trace.span import format_trace_id
 
 resource = Resource.create({SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME")})
 
@@ -167,16 +169,16 @@ def get_datetime() -> str:
 # - GITHUB_TOKEN: Your GitHub personal access token
 # - GITHUB_MODEL_ID: Model to use (e.g., gpt-4o-mini, gpt-4o)
 model_id=os.environ.get("GITHUB_MODEL_ID")
-# openai_chat_client = OpenAIChatClient(
-#     base_url=os.environ.get("GITHUB_ENDPOINT"),
-#     api_key=os.environ.get("GITHUB_TOKEN"), 
-#     model_id=model_id
-# )
 openai_chat_client = OpenAIChatClient(
-    #base_url=os.environ.get("GITHUB_ENDPOINT"),
-    api_key=os.environ.get("OPENAI_API_KEY"), 
+    base_url=os.environ.get("GITHUB_ENDPOINT"),
+    api_key=os.environ.get("GITHUB_TOKEN"), 
     model_id=model_id
 )
+# openai_chat_client = OpenAIChatClient(
+#     #base_url=os.environ.get("GITHUB_ENDPOINT"),
+#     api_key=os.environ.get("OPENAI_API_KEY"), 
+#     model_id=model_id
+# )
 
 # 🤖 Create the Travel Planning Agent
 # This creates a conversational AI agent with specific capabilities:
@@ -189,53 +191,101 @@ agent = ChatAgent(
     tools=[get_random_destination, get_weather, get_datetime]  # Tool functions available to the agent
 )
 
+entityGuid=os.environ.get("NEW_RELIC_ENTITY_GUID")
+
 # 🚀 Run the Agent
 # Send a message to the agent and get a response
 # The agent will use its tools (get_random_destination) if needed
 async def main():
-    userPrompt = "Plan me a day trip with activities and calculate the current weather at the destination. Mention the current date and time of the plan.";
-    response = await agent.run(userPrompt)
+    with tracer.start_as_current_span("main") as current_span:
+        logger.info("[main] starting agent interaction")
+        current_span.set_attribute("model_id", model_id)
 
-    # 📖 Extract and Display the Travel Plan
-    # Get the last message from the conversation (agent's response)s
-    last_message = response.messages[-1]
-    # Extract the text content from the message
-    text_content = last_message.contents[0].text
-    # Display the formatted travel plan
-    print("🏖️ Travel plan:")
-    print(text_content)
+        userPrompt = "Plan me a day trip with activities and calculate the current weather at the destination. Mention the current date and time of the plan.";
+        response = await agent.run(userPrompt)
 
-    logger.info("[agent_response]", extra={
-        "newrelic.event.type": "LlmChatCompletionMessage", 
-        "id": 1, 
-        "request_id": 1,
-        "span_id": 1,
-        "trace_id": 1,
-        "response.model": model_id,
-        "vendor": "OpenAI",
-        "ingest_source": "Python",
-        "content": userPrompt,
-        "role": "user",
-        "sequence": 0,
-        "is_response": False,
-        "completion_id": 1,
-        "tags.aiEnabledApp": True})
+        # 📖 Extract and Display the Travel Plan
+        # Get the last message from the conversation (agent's response)s
+        last_message = response.messages[-1]
+        # Extract the text content from the message
+        text_content = last_message.contents[0].text
+        # Display the formatted travel plan
+        print("🏖️ Travel plan:")
+        print(text_content)
+
+        span_id = format(current_span.get_span_context().span_id, "016x")
+        trace_id = format_trace_id(current_span.get_span_context().trace_id)
+
+        input_tokens = response.usage_details.input_token_count
+        output_tokens = response.usage_details.output_token_count
+
+        logger.info("[agent_response]", extra={
+            "newrelic.event.type": "LlmChatCompletionMessage", 
+            #"appId": 1234567890,
+            "appName": "agent-travel-planner",
+            "entityGuid": entityGuid,
+            "id": str(uuid.uuid4()), 
+            "request_id": str(uuid.uuid4()),
+            "span_id": span_id,
+            "trace_id": trace_id,
+            "response.model": model_id,
+            "vendor": "openai",
+            "ingest_source": "Python",
+            "content": userPrompt,
+            "role": "user",
+            "sequence": 0,
+            "is_response": False,
+            "completion_id": str(uuid.uuid4()),
+            "tags.aiEnabledApp": True,
+            "tags.account": "AI-Observability",
+            "tags.accountId": 4541509,
+            "tags.trustedAccountId": 3882521})
+        
+        logger.info("[agent_response]", extra={
+            "newrelic.event.type": "LlmChatCompletionMessage", 
+            #"appId": 1234567890,
+            "appName": "agent-travel-planner",
+            "entityGuid": entityGuid,
+            "id": str(uuid.uuid4()), 
+            "request_id": str(uuid.uuid4()),
+            "span_id": span_id,
+            "trace_id": trace_id,
+            "response.model": model_id,
+            "vendor": "openai",
+            "ingest_source": "Python",
+            "content": text_content,
+            "role": "assistant",
+            "sequence": 1,
+            "is_response": True,
+            "completion_id": str(uuid.uuid4()),
+            "tags.aiEnabledApp": True,
+            "tags.account": "AI-Observability",
+            "tags.accountId": 4541509,
+            "tags.trustedAccountId": 3882521})
+        
+        logger.info("[agent_response]", extra={
+            "newrelic.event.type": "LlmChatCompletionSummary", 
+            #"appId": 1234567890,
+            "appName": "agent-travel-planner",
+            "entityGuid": entityGuid,
+            "id": str(uuid.uuid4()), 
+            "request_id": str(uuid.uuid4()),
+            "span_id": span_id,
+            "trace_id": trace_id,
+            "request.model": model_id,
+            "response.model": model_id,
+            "token_count": input_tokens+output_tokens,
+            "request.max_tokens": 0,
+            "response.number_of_messages": 2,
+            "response.choices.finish_reason": "FINISH",
+            "vendor": "openai",
+            "ingest_source": "Python",
+            "tags.aiEnabledApp": True,
+            "tags.account": "AI-Observability",
+            "tags.accountId": 4541509,
+            "tags.trustedAccountId": 3882521})
     
-    logger.info("[agent_response]", extra={
-        "newrelic.event.type": "LlmChatCompletionSummary", 
-        "id": 1, 
-        "request_id": 1,
-        "span_id": 1,
-        "trace_id": 1,
-        "request.model": model_id,
-        "response.model": model_id,
-        "token_count": 0,
-        "request.max_tokens": 0,
-        "response.number_of_messages": 2,
-        "response.choices.finish_reason": "stop",
-        "vendor": "OpenAI",
-        "ingest_source": "Python",
-        "tags.aiEnabledApp": True})
+        pass
 
 
 if __name__ == "__main__":
